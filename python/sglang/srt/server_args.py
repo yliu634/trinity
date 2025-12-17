@@ -259,6 +259,11 @@ class ServerArgs:
     vector_search_prefill_deadline_ms: int = 200
     vector_search_context_template: str = "\n\n[Retrieved Context]\n{docs}\n"
     vector_search_decode_interval_tokens: int = 64
+    enable_vector_search_decode: bool = False
+    vector_search_decode_topk: int = 4
+    vector_search_decode_deadline_ms: int = 200
+    vector_search_decode_min_chars: int = 8
+    vector_search_decode_max_injected_bytes: int = 32768
 
     # Quantization and data type
     dtype: str = "auto"
@@ -2252,7 +2257,36 @@ class ServerArgs:
             "--vector-search-decode-interval-tokens",
             type=int,
             default=ServerArgs.vector_search_decode_interval_tokens,
-            help="Decode-time retrieval interval in tokens (config placeholder; integration added in later PR).",
+            help="Decode-time retrieval interval in tokens.",
+        )
+        parser.add_argument(
+            "--enable-vector-search-decode",
+            action="store_true",
+            help="If set, run vector search periodically during decoding and inject retrieved docs into the prompt (non-streaming only in current implementation).",
+        )
+        parser.add_argument(
+            "--vector-search-decode-topk",
+            type=int,
+            default=ServerArgs.vector_search_decode_topk,
+            help="TopK for the decode-time vector search.",
+        )
+        parser.add_argument(
+            "--vector-search-decode-deadline-ms",
+            type=int,
+            default=ServerArgs.vector_search_decode_deadline_ms,
+            help="Deadline (ms) for the decode-time vector search request.",
+        )
+        parser.add_argument(
+            "--vector-search-decode-min-chars",
+            type=int,
+            default=ServerArgs.vector_search_decode_min_chars,
+            help="Minimum number of characters in the generated text chunk to trigger a decode-time vector search.",
+        )
+        parser.add_argument(
+            "--vector-search-decode-max-injected-bytes",
+            type=int,
+            default=ServerArgs.vector_search_decode_max_injected_bytes,
+            help="Max total bytes of retrieved docs to inject per decode-time retrieval.",
         )
 
         # Quantization and data type

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Union
@@ -62,6 +63,12 @@ class OpenAIServingCompletion(OpenAIServingBase):
             )
         return self._vector_search_client
 
+    @staticmethod
+    def _coerce_rid(rid: object) -> str:
+        if isinstance(rid, list):
+            return str(rid[0]) if rid else ""
+        return str(rid) if isinstance(rid, str) and rid else ""
+
     async def handle_request(
         self, request: CompletionRequest, raw_request: Request
     ) -> Union[Any, StreamingResponse, ErrorResponse]:
@@ -73,7 +80,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 if query_text:
                     try:
                         resp = await client.search(
-                            request_id=request.rid or "",
+                            request_id=self._coerce_rid(getattr(request, "rid", None)),
                             stage=vector_search_pb2.PREFILL,
                             text=query_text,
                             topk=int(sa.vector_search_prefill_topk),
@@ -90,7 +97,148 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     except Exception as e:
                         logger.info("Vector search prefill injection failed: %s", e)
 
+        if getattr(sa, "enable_vector_search_decode", False):
+            if request.stream:
+                return self.create_error_response(
+                    "Vector search decode-time injection is not supported for streaming responses yet.",
+                    err_type="NotImplementedError",
+                    status_code=400,
+                )
+            return await self._handle_request_with_decode_retrieval(request, raw_request)
+
         return await super().handle_request(request, raw_request)
+
+    async def _handle_request_with_decode_retrieval(
+        self, request: CompletionRequest, raw_request: Request
+    ) -> Union[Any, ErrorResponse]:
+        sa = self.tokenizer_manager.server_args
+        if request.n != 1:
+            return self.create_error_response(
+                "Vector search decode-time injection currently supports n=1 only.",
+                err_type="NotImplementedError",
+                status_code=400,
+            )
+        if request.echo or request.logprobs is not None:
+            return self.create_error_response(
+                "Vector search decode-time injection is not compatible with echo/logprobs yet.",
+                err_type="NotImplementedError",
+                status_code=400,
+            )
+        if not isinstance(request.prompt, str):
+            return self.create_error_response(
+                "Vector search decode-time injection currently supports string prompt only.",
+                err_type="NotImplementedError",
+                status_code=400,
+            )
+
+        interval = int(getattr(sa, "vector_search_decode_interval_tokens", 0) or 0)
+        if interval <= 0:
+            return await super().handle_request(request, raw_request)
+
+        total = request.max_tokens
+        if total is None or int(total) <= 0:
+            return await super().handle_request(request, raw_request)
+        remaining = int(total)
+
+        base_prompt = str(request.prompt)
+        injected_context = ""
+        completion_so_far = ""
+
+        first_id: str | None = None
+        last_weight_version: str | None = None
+        prompt_tokens_max = 0
+        completion_tokens_sum = 0
+        last_finish_reason: dict | None = None
+
+        client = self._get_vector_search_client()
+        while remaining > 0:
+            chunk_req = copy.deepcopy(request)
+            chunk_req.stream = False
+            chunk_req.n = 1
+            chunk_req.max_tokens = min(remaining, interval)
+
+            chunk_req.prompt = (
+                base_prompt
+                + (("\n\n" + injected_context) if injected_context else "")
+                + (("\n\n" + completion_so_far) if completion_so_far else "")
+            )
+
+            adapted_request, chunk_req = self._convert_to_internal_request(
+                chunk_req, raw_request
+            )
+            try:
+                ret = await self.tokenizer_manager.generate_request(
+                    adapted_request, raw_request
+                ).__anext__()
+            except ValueError as e:
+                return self.create_error_response(str(e))
+
+            if isinstance(ret, list):
+                ret = ret[0]
+            meta = ret["meta_info"]
+            if first_id is None:
+                first_id = meta["id"]
+            last_weight_version = meta.get("weight_version")
+            prompt_tokens_max = max(prompt_tokens_max, int(meta.get("prompt_tokens", 0)))
+            completion_tokens = int(meta.get("completion_tokens", 0))
+            completion_tokens_sum += completion_tokens
+            if completion_tokens <= 0:
+                last_finish_reason = meta.get("finish_reason")
+                break
+            remaining = max(0, remaining - completion_tokens)
+
+            new_text = ret.get("text") or ""
+            completion_so_far += new_text
+
+            finish_reason = meta.get("finish_reason")
+            last_finish_reason = finish_reason
+            if finish_reason and finish_reason.get("type") not in {"length"}:
+                break
+            if remaining <= 0:
+                break
+
+            if (
+                client is not None
+                and len(new_text) >= int(getattr(sa, "vector_search_decode_min_chars", 0))
+                and new_text.strip()
+            ):
+                try:
+                    vs_resp = await client.search(
+                        request_id=self._coerce_rid(getattr(request, "rid", None)),
+                        stage=vector_search_pb2.DECODE,
+                        text=new_text,
+                        topk=int(getattr(sa, "vector_search_decode_topk", 4)),
+                        deadline_ms=int(
+                            getattr(sa, "vector_search_decode_deadline_ms", 200)
+                        ),
+                    )
+                    if not vs_resp.error_message and vs_resp.docs:
+                        docs_text = format_retrieved_docs(
+                            vs_resp.docs,
+                            max_docs=int(getattr(sa, "vector_search_decode_topk", 4)),
+                            max_total_bytes=int(
+                                getattr(sa, "vector_search_decode_max_injected_bytes", 0)
+                            )
+                            or None,
+                        )
+                        if docs_text:
+                            injected_context += render_context(
+                                str(sa.vector_search_context_template), docs_text
+                            )
+                except Exception as e:
+                    logger.info("Vector search decode injection failed: %s", e)
+
+        combined_ret = {
+            "text": completion_so_far,
+            "meta_info": {
+                "id": first_id or f"cmpl-{int(time.time())}",
+                "prompt_tokens": prompt_tokens_max,
+                "completion_tokens": completion_tokens_sum,
+                "finish_reason": last_finish_reason,
+                "weight_version": last_weight_version,
+            },
+        }
+        return self._build_completion_response(request, [combined_ret], int(time.time()))
 
     def _request_id_prefix(self) -> str:
         return "cmpl-"
