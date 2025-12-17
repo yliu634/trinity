@@ -24,21 +24,21 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13vector_search.proto\x12\x19sglang.grpc.vector_search\"\x85\x01\n\rSearchRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12/\n\x05stage\x18\x02 \x01(\x0e\x32 .sglang.grpc.vector_search.Stage\x12\x0c\n\x04text\x18\x03 \x01(\t\x12\x0c\n\x04topk\x18\x04 \x01(\r\x12\x13\n\x0b\x64\x65\x61\x64line_ms\x18\x05 \x01(\r\";\n\x0cRetrievedDoc\x12\x0e\n\x06\x64oc_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\r\n\x05score\x18\x03 \x01(\x02\"r\n\x0eSearchResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x35\n\x04\x64ocs\x18\x02 \x03(\x0b\x32\'.sglang.grpc.vector_search.RetrievedDoc\x12\x15\n\rerror_message\x18\x03 \x01(\t*7\n\x05Stage\x12\x15\n\x11STAGE_UNSPECIFIED\x10\x00\x12\x0b\n\x07PREFILL\x10\x01\x12\n\n\x06\x44\x45\x43ODE\x10\x02\x32m\n\x0cVectorSearch\x12]\n\x06Search\x12(.sglang.grpc.vector_search.SearchRequest\x1a).sglang.grpc.vector_search.SearchResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13vector_search.proto\x12\x19sglang.grpc.vector_search\"\x8a\x02\n\rSearchRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12/\n\x05stage\x18\x02 \x01(\x0e\x32 .sglang.grpc.vector_search.Stage\x12\x0c\n\x04text\x18\x03 \x01(\t\x12\x0c\n\x04topk\x18\x04 \x01(\r\x12\x13\n\x0b\x64\x65\x61\x64line_ms\x18\x05 \x01(\r\x12\x17\n\x0frdma_session_id\x18\n \x01(\t\x12\x19\n\x11rdma_doc_out_addr\x18\x0b \x01(\x04\x12\x18\n\x10rdma_doc_out_len\x18\x0c \x01(\r\x12\x1a\n\x12rdma_meta_out_addr\x18\r \x01(\x04\x12\x19\n\x11rdma_meta_out_len\x18\x0e \x01(\r\";\n\x0cRetrievedDoc\x12\x0e\n\x06\x64oc_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\r\n\x05score\x18\x03 \x01(\x02\"\xb3\x01\n\x0eSearchResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x35\n\x04\x64ocs\x18\x02 \x03(\x0b\x32\'.sglang.grpc.vector_search.RetrievedDoc\x12\x15\n\rerror_message\x18\x03 \x01(\t\x12\x1e\n\x16rdma_doc_bytes_written\x18\n \x01(\r\x12\x1f\n\x17rdma_meta_bytes_written\x18\x0b \x01(\r*7\n\x05Stage\x12\x15\n\x11STAGE_UNSPECIFIED\x10\x00\x12\x0b\n\x07PREFILL\x10\x01\x12\n\n\x06\x44\x45\x43ODE\x10\x02\x32m\n\x0cVectorSearch\x12]\n\x06Search\x12(.sglang.grpc.vector_search.SearchRequest\x1a).sglang.grpc.vector_search.SearchResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'vector_search_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_STAGE']._serialized_start=363
-  _globals['_STAGE']._serialized_end=418
+  _globals['_STAGE']._serialized_start=562
+  _globals['_STAGE']._serialized_end=617
   _globals['_SEARCHREQUEST']._serialized_start=51
-  _globals['_SEARCHREQUEST']._serialized_end=184
-  _globals['_RETRIEVEDDOC']._serialized_start=186
-  _globals['_RETRIEVEDDOC']._serialized_end=245
-  _globals['_SEARCHRESPONSE']._serialized_start=247
-  _globals['_SEARCHRESPONSE']._serialized_end=361
-  _globals['_VECTORSEARCH']._serialized_start=420
-  _globals['_VECTORSEARCH']._serialized_end=529
+  _globals['_SEARCHREQUEST']._serialized_end=317
+  _globals['_RETRIEVEDDOC']._serialized_start=319
+  _globals['_RETRIEVEDDOC']._serialized_end=378
+  _globals['_SEARCHRESPONSE']._serialized_start=381
+  _globals['_SEARCHRESPONSE']._serialized_end=560
+  _globals['_VECTORSEARCH']._serialized_start=619
+  _globals['_VECTORSEARCH']._serialized_end=728
 # @@protoc_insertion_point(module_scope)

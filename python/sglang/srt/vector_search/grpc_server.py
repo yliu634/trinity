@@ -14,6 +14,10 @@ from sglang.srt.vector_search.batching import MicroBatchConfig, MicroBatcher
 from sglang.srt.vector_search.docstore import DocStore
 from sglang.srt.vector_search.embedder import EmbedderConfig, SentenceTransformerEmbedder
 from sglang.srt.vector_search.index_numpy import NumpyCosineIndex
+from sglang.srt.vector_search.rdma.mooncake_responder import (
+    MooncakeRdmaConfig,
+    MooncakeRdmaResponder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +37,14 @@ class VectorSearchService:
         index: NumpyCosineIndex,
         chunk_ids: list[str],
         micro_batch: MicroBatchConfig,
+        rdma_responder: Optional[MooncakeRdmaResponder],
     ):
         self._docstore = docstore
         self._embedder = embedder
         self._index = index
         self._chunk_ids = chunk_ids
         self._batcher: MicroBatcher[_PendingRequest] = MicroBatcher(micro_batch)
+        self._rdma_responder = rdma_responder
         self._task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -109,13 +115,34 @@ class VectorSearchService:
                         )
                     )
                 if not batch[batch_i].future.done():
-                    batch[batch_i].future.set_result(
-                        vector_search_pb2.SearchResponse(
-                            request_id=req.request_id,
-                            docs=doc_msgs,
-                            error_message="",
+                    # If caller provided RDMA params and server has RDMA enabled,
+                    # write docs/meta via RDMA and return empty docs over gRPC.
+                    if (
+                        self._rdma_responder is not None
+                        and req.rdma_session_id
+                        and req.rdma_doc_out_addr
+                        and req.rdma_meta_out_addr
+                    ):
+                        doc_bytes, meta_bytes = self._rdma_responder.pack_and_write(
+                            request=req, docs=doc_msgs
                         )
-                    )
+                        batch[batch_i].future.set_result(
+                            vector_search_pb2.SearchResponse(
+                                request_id=req.request_id,
+                                docs=[],
+                                error_message="",
+                                rdma_doc_bytes_written=doc_bytes,
+                                rdma_meta_bytes_written=meta_bytes,
+                            )
+                        )
+                    else:
+                        batch[batch_i].future.set_result(
+                            vector_search_pb2.SearchResponse(
+                                request_id=req.request_id,
+                                docs=doc_msgs,
+                                error_message="",
+                            )
+                        )
 
 
 class VectorSearchServicer(vector_search_pb2_grpc.VectorSearchServicer):
@@ -137,6 +164,7 @@ async def _build_index_and_service(
     embedding_device: Optional[str],
     embedding_batch_size: int,
     micro_batch: MicroBatchConfig,
+    rdma_responder: Optional[MooncakeRdmaResponder],
 ) -> VectorSearchService:
     docstore = DocStore.load_pickle(docstore_path)
     chunk_ids = docstore.chunk_ids()
@@ -160,6 +188,7 @@ async def _build_index_and_service(
         index=index,
         chunk_ids=chunk_ids,
         micro_batch=micro_batch,
+        rdma_responder=rdma_responder,
     )
     service.start()
     return service
@@ -175,7 +204,26 @@ async def serve(
     embedding_batch_size: int,
     max_batch_size: int,
     flush_timeout_ms: int,
+    enable_rdma_response: bool,
+    rdma_hostname: Optional[str],
+    rdma_ib_device: Optional[str],
+    rdma_topk_max: int,
+    rdma_doc_slot_bytes: int,
 ) -> None:
+    rdma_responder: Optional[MooncakeRdmaResponder] = None
+    if enable_rdma_response:
+        if not rdma_hostname:
+            raise ValueError("--rdma-hostname is required when --enable-rdma-response is set")
+        rdma_responder = MooncakeRdmaResponder(
+            MooncakeRdmaConfig(
+                rdma_hostname=rdma_hostname,
+                ib_device=rdma_ib_device,
+                topk_max=rdma_topk_max,
+                doc_slot_bytes=rdma_doc_slot_bytes,
+            )
+        )
+        logger.info("RDMA response enabled. server_session_id=%s", rdma_responder.session_id)
+
     service = await _build_index_and_service(
         docstore_path=docstore_path,
         embedding_model=embedding_model,
@@ -184,6 +232,7 @@ async def serve(
         micro_batch=MicroBatchConfig(
             max_batch_size=max_batch_size, flush_timeout_ms=flush_timeout_ms
         ),
+        rdma_responder=rdma_responder,
     )
     server = grpc.aio.server()
     vector_search_pb2_grpc.add_VectorSearchServicer_to_server(
@@ -239,6 +288,35 @@ def main() -> None:
         default=1,
         help="Micro-batch flush timeout in milliseconds.",
     )
+    parser.add_argument(
+        "--enable-rdma-response",
+        action="store_true",
+        help="If set, allow callers to receive docs/meta via Mooncake RDMA (requires mooncake-transfer-engine).",
+    )
+    parser.add_argument(
+        "--rdma-hostname",
+        type=str,
+        default=None,
+        help="Hostname/IP used to initialize Mooncake transfer engine on the server.",
+    )
+    parser.add_argument(
+        "--rdma-ib-device",
+        type=str,
+        default=None,
+        help="Optional RDMA ib device string for Mooncake.",
+    )
+    parser.add_argument(
+        "--rdma-topk-max",
+        type=int,
+        default=8,
+        help="Max supported topk for RDMA response packing.",
+    )
+    parser.add_argument(
+        "--rdma-doc-slot-bytes",
+        type=int,
+        default=8192,
+        help="Fixed bytes per doc slot when packing docs for RDMA response.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -253,6 +331,11 @@ def main() -> None:
             embedding_batch_size=args.embedding_batch_size,
             max_batch_size=args.max_batch_size,
             flush_timeout_ms=args.flush_timeout_ms,
+            enable_rdma_response=args.enable_rdma_response,
+            rdma_hostname=args.rdma_hostname,
+            rdma_ib_device=args.rdma_ib_device,
+            rdma_topk_max=args.rdma_topk_max,
+            rdma_doc_slot_bytes=args.rdma_doc_slot_bytes,
         )
     )
 
