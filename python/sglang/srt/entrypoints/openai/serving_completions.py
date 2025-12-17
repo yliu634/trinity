@@ -26,6 +26,9 @@ from sglang.srt.parser.code_completion_parser import (
     generate_completion_prompt_from_request,
 )
 from sglang.utils import convert_json_schema_to_str
+from sglang.srt.vector_search.client import VectorSearchClient, VectorSearchClientConfig
+from sglang.srt.vector_search.grpc import vector_search_pb2
+from sglang.srt.vector_search.prompt_injection import format_retrieved_docs, render_context
 
 if TYPE_CHECKING:
     from sglang.srt.managers.template_manager import TemplateManager
@@ -44,6 +47,50 @@ class OpenAIServingCompletion(OpenAIServingBase):
     ):
         super().__init__(tokenizer_manager)
         self.template_manager = template_manager
+        self._vector_search_client: Optional[VectorSearchClient] = None
+
+    def _get_vector_search_client(self) -> Optional[VectorSearchClient]:
+        sa = self.tokenizer_manager.server_args
+        if not getattr(sa, "vector_search_url", None):
+            return None
+        if self._vector_search_client is None:
+            self._vector_search_client = VectorSearchClient(
+                VectorSearchClientConfig(
+                    endpoint=sa.vector_search_url,
+                    timeout_ms=int(sa.vector_search_timeout_ms),
+                )
+            )
+        return self._vector_search_client
+
+    async def handle_request(
+        self, request: CompletionRequest, raw_request: Request
+    ) -> Union[Any, StreamingResponse, ErrorResponse]:
+        sa = self.tokenizer_manager.server_args
+        if getattr(sa, "enable_vector_search_prefill", False):
+            client = self._get_vector_search_client()
+            if client is not None and isinstance(request.prompt, str):
+                query_text = request.prompt.strip()
+                if query_text:
+                    try:
+                        resp = await client.search(
+                            request_id=request.rid or "",
+                            stage=vector_search_pb2.PREFILL,
+                            text=query_text,
+                            topk=int(sa.vector_search_prefill_topk),
+                            deadline_ms=int(sa.vector_search_prefill_deadline_ms),
+                        )
+                        if not resp.error_message and resp.docs:
+                            docs_text = format_retrieved_docs(
+                                resp.docs, max_docs=int(sa.vector_search_prefill_topk)
+                            )
+                            ctx = render_context(
+                                str(sa.vector_search_context_template), docs_text
+                            )
+                            request.prompt = ctx + "\n\n" + request.prompt
+                    except Exception as e:
+                        logger.info("Vector search prefill injection failed: %s", e)
+
+        return await super().handle_request(request, raw_request)
 
     def _request_id_prefix(self) -> str:
         return "cmpl-"

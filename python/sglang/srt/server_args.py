@@ -254,6 +254,11 @@ class ServerArgs:
     # Client-side configuration for a dedicated vector-search pool service.
     vector_search_url: Optional[str] = None
     vector_search_timeout_ms: int = 2000
+    enable_vector_search_prefill: bool = False
+    vector_search_prefill_topk: int = 4
+    vector_search_prefill_deadline_ms: int = 200
+    vector_search_context_template: str = "\n\n[Retrieved Context]\n{docs}\n"
+    vector_search_decode_interval_tokens: int = 64
 
     # Quantization and data type
     dtype: str = "auto"
@@ -2219,6 +2224,35 @@ class ServerArgs:
             type=int,
             default=ServerArgs.vector_search_timeout_ms,
             help="Timeout in milliseconds for vector-search RPCs (control-plane).",
+        )
+        parser.add_argument(
+            "--enable-vector-search-prefill",
+            action="store_true",
+            help="If set, run vector search once at request start and inject retrieved docs into the prompt.",
+        )
+        parser.add_argument(
+            "--vector-search-prefill-topk",
+            type=int,
+            default=ServerArgs.vector_search_prefill_topk,
+            help="TopK for the prefill-time vector search.",
+        )
+        parser.add_argument(
+            "--vector-search-prefill-deadline-ms",
+            type=int,
+            default=ServerArgs.vector_search_prefill_deadline_ms,
+            help="Deadline (ms) for the prefill-time vector search request.",
+        )
+        parser.add_argument(
+            "--vector-search-context-template",
+            type=str,
+            default=ServerArgs.vector_search_context_template,
+            help="Template used to inject retrieved docs into prompt. Use {docs} placeholder.",
+        )
+        parser.add_argument(
+            "--vector-search-decode-interval-tokens",
+            type=int,
+            default=ServerArgs.vector_search_decode_interval_tokens,
+            help="Decode-time retrieval interval in tokens (config placeholder; integration added in later PR).",
         )
 
         # Quantization and data type
