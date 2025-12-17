@@ -10,7 +10,12 @@ from typing import Optional
 import grpc
 
 from sglang.srt.vector_search.grpc import vector_search_pb2, vector_search_pb2_grpc
-from sglang.srt.vector_search.batching import MicroBatchConfig, MicroBatcher
+from sglang.srt.vector_search.batching import (
+    MicroBatchConfig,
+    MicroBatcher,
+    StageAwareBatcher,
+    StageAwareConfig,
+)
 from sglang.srt.vector_search.docstore import DocStore
 from sglang.srt.vector_search.embedder import EmbedderConfig, SentenceTransformerEmbedder
 from sglang.srt.vector_search.index_numpy import NumpyCosineIndex
@@ -37,13 +42,22 @@ class VectorSearchService:
         index: NumpyCosineIndex,
         chunk_ids: list[str],
         micro_batch: MicroBatchConfig,
+        stage_aware_cfg: Optional[StageAwareConfig],
         rdma_responder: Optional[MooncakeRdmaResponder],
     ):
         self._docstore = docstore
         self._embedder = embedder
         self._index = index
         self._chunk_ids = chunk_ids
-        self._batcher: MicroBatcher[_PendingRequest] = MicroBatcher(micro_batch)
+        if stage_aware_cfg is not None:
+            self._batcher = StageAwareBatcher[_PendingRequest](
+                stage_aware_cfg,
+                is_prefill_fn=lambda item: item.request.stage
+                == vector_search_pb2.PREFILL,
+                deadline_ms_fn=lambda item: int(item.request.deadline_ms),
+            )
+        else:
+            self._batcher = MicroBatcher[_PendingRequest](micro_batch)
         self._rdma_responder = rdma_responder
         self._task: Optional[asyncio.Task] = None
 
@@ -71,6 +85,7 @@ class VectorSearchService:
     async def _batch_loop(self) -> None:
         while True:
             batch = await self._batcher.get_batch()
+            start = asyncio.get_running_loop().time()
             try:
                 await self._process_batch(batch)
             except Exception as e:
@@ -83,6 +98,12 @@ class VectorSearchService:
                                 error_message=str(e),
                             )
                         )
+            finally:
+                end = asyncio.get_running_loop().time()
+                if hasattr(self._batcher, "report_batch_service_time"):
+                    self._batcher.report_batch_service_time(
+                        duration_s=end - start, batch_size=len(batch)
+                    )
 
     async def _process_batch(self, batch: list[_PendingRequest]) -> None:
         texts = [b.request.text for b in batch]
@@ -160,6 +181,7 @@ async def _build_index_and_service(
     embedding_device: Optional[str],
     embedding_batch_size: int,
     micro_batch: MicroBatchConfig,
+    stage_aware_cfg: Optional[StageAwareConfig],
     rdma_responder: Optional[MooncakeRdmaResponder],
 ) -> VectorSearchService:
     docstore = DocStore.load_pickle(docstore_path)
@@ -184,6 +206,7 @@ async def _build_index_and_service(
         index=index,
         chunk_ids=chunk_ids,
         micro_batch=micro_batch,
+        stage_aware_cfg=stage_aware_cfg,
         rdma_responder=rdma_responder,
     )
     service.start()
@@ -200,6 +223,9 @@ async def serve(
     embedding_batch_size: int,
     max_batch_size: int,
     flush_timeout_ms: int,
+    enable_stage_aware_scheduler: bool,
+    prefill_reserve_ratio: float,
+    prefill_tau_ms: int,
     enable_rdma_response: bool,
     rdma_hostname: Optional[str],
     rdma_ib_device: Optional[str],
@@ -224,6 +250,15 @@ async def serve(
             "RDMA response enabled. server_session_id=%s", rdma_responder.session_id
         )
 
+    stage_aware_cfg: Optional[StageAwareConfig] = None
+    if enable_stage_aware_scheduler:
+        stage_aware_cfg = StageAwareConfig(
+            max_batch_size=max_batch_size,
+            flush_timeout_ms=flush_timeout_ms,
+            prefill_reserve_ratio=prefill_reserve_ratio,
+            prefill_tau_ms=prefill_tau_ms,
+        )
+
     service = await _build_index_and_service(
         docstore_path=docstore_path,
         embedding_model=embedding_model,
@@ -232,6 +267,7 @@ async def serve(
         micro_batch=MicroBatchConfig(
             max_batch_size=max_batch_size, flush_timeout_ms=flush_timeout_ms
         ),
+        stage_aware_cfg=stage_aware_cfg,
         rdma_responder=rdma_responder,
     )
     server = grpc.aio.server()
@@ -289,6 +325,23 @@ def main() -> None:
         help="Micro-batch flush timeout in milliseconds.",
     )
     parser.add_argument(
+        "--enable-stage-aware-scheduler",
+        action="store_true",
+        help="If set, use Trinity-style stage-aware scheduling (prefill priority) when forming batches.",
+    )
+    parser.add_argument(
+        "--prefill-reserve-ratio",
+        type=float,
+        default=0.25,
+        help="Reserve this fraction of each batch for prefill (stage-aware scheduler).",
+    )
+    parser.add_argument(
+        "--prefill-tau-ms",
+        type=int,
+        default=1,
+        help="Prefill flush timeout (ms) used by stage-aware scheduler to serve prefill quickly.",
+    )
+    parser.add_argument(
         "--enable-rdma-response",
         action="store_true",
         help="If set, allow callers to receive docs/meta via Mooncake RDMA (requires mooncake-transfer-engine).",
@@ -331,6 +384,9 @@ def main() -> None:
             embedding_batch_size=args.embedding_batch_size,
             max_batch_size=args.max_batch_size,
             flush_timeout_ms=args.flush_timeout_ms,
+            enable_stage_aware_scheduler=args.enable_stage_aware_scheduler,
+            prefill_reserve_ratio=args.prefill_reserve_ratio,
+            prefill_tau_ms=args.prefill_tau_ms,
             enable_rdma_response=args.enable_rdma_response,
             rdma_hostname=args.rdma_hostname,
             rdma_ib_device=args.rdma_ib_device,
