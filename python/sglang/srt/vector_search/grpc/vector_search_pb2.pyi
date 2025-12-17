@@ -17,18 +17,28 @@ PREFILL: Stage
 DECODE: Stage
 
 class SearchRequest(_message.Message):
-    __slots__ = ("request_id", "stage", "text", "topk", "deadline_ms")
+    __slots__ = ("request_id", "stage", "text", "topk", "deadline_ms", "rdma_session_id", "rdma_doc_out_addr", "rdma_doc_out_len", "rdma_meta_out_addr", "rdma_meta_out_len")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     STAGE_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     TOPK_FIELD_NUMBER: _ClassVar[int]
     DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
+    RDMA_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    RDMA_DOC_OUT_ADDR_FIELD_NUMBER: _ClassVar[int]
+    RDMA_DOC_OUT_LEN_FIELD_NUMBER: _ClassVar[int]
+    RDMA_META_OUT_ADDR_FIELD_NUMBER: _ClassVar[int]
+    RDMA_META_OUT_LEN_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     stage: Stage
     text: str
     topk: int
     deadline_ms: int
-    def __init__(self, request_id: _Optional[str] = ..., stage: _Optional[_Union[Stage, str]] = ..., text: _Optional[str] = ..., topk: _Optional[int] = ..., deadline_ms: _Optional[int] = ...) -> None: ...
+    rdma_session_id: str
+    rdma_doc_out_addr: int
+    rdma_doc_out_len: int
+    rdma_meta_out_addr: int
+    rdma_meta_out_len: int
+    def __init__(self, request_id: _Optional[str] = ..., stage: _Optional[_Union[Stage, str]] = ..., text: _Optional[str] = ..., topk: _Optional[int] = ..., deadline_ms: _Optional[int] = ..., rdma_session_id: _Optional[str] = ..., rdma_doc_out_addr: _Optional[int] = ..., rdma_doc_out_len: _Optional[int] = ..., rdma_meta_out_addr: _Optional[int] = ..., rdma_meta_out_len: _Optional[int] = ...) -> None: ...
 
 class RetrievedDoc(_message.Message):
     __slots__ = ("doc_id", "text", "score")
@@ -41,11 +51,15 @@ class RetrievedDoc(_message.Message):
     def __init__(self, doc_id: _Optional[str] = ..., text: _Optional[str] = ..., score: _Optional[float] = ...) -> None: ...
 
 class SearchResponse(_message.Message):
-    __slots__ = ("request_id", "docs", "error_message")
+    __slots__ = ("request_id", "docs", "error_message", "rdma_doc_bytes_written", "rdma_meta_bytes_written")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     DOCS_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    RDMA_DOC_BYTES_WRITTEN_FIELD_NUMBER: _ClassVar[int]
+    RDMA_META_BYTES_WRITTEN_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     docs: _containers.RepeatedCompositeFieldContainer[RetrievedDoc]
     error_message: str
-    def __init__(self, request_id: _Optional[str] = ..., docs: _Optional[_Iterable[_Union[RetrievedDoc, _Mapping]]] = ..., error_message: _Optional[str] = ...) -> None: ...
+    rdma_doc_bytes_written: int
+    rdma_meta_bytes_written: int
+    def __init__(self, request_id: _Optional[str] = ..., docs: _Optional[_Iterable[_Union[RetrievedDoc, _Mapping]]] = ..., error_message: _Optional[str] = ..., rdma_doc_bytes_written: _Optional[int] = ..., rdma_meta_bytes_written: _Optional[int] = ...) -> None: ...
