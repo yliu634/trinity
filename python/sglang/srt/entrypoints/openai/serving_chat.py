@@ -11,6 +11,7 @@ import orjson
 from fastapi import Request
 from fastapi.responses import ORJSONResponse, StreamingResponse
 from jsonschema import Draft202012Validator, SchemaError
+from sglang.srt.vector_search.grpc import vector_search_pb2
 
 from sglang.srt.entrypoints.openai.encoding_dsv32 import encode_messages
 from sglang.srt.entrypoints.openai.protocol import (
@@ -20,6 +21,7 @@ from sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse,
     ChatCompletionTokenLogprob,
+    ChatCompletionMessageGenericParam,
     ChatMessage,
     ChoiceLogprobs,
     DeltaMessage,
@@ -46,6 +48,8 @@ from sglang.srt.managers.io_struct import GenerateReqInput
 from sglang.srt.parser.conversation import generate_chat_conv
 from sglang.srt.parser.jinja_template_utils import process_content_for_template_format
 from sglang.srt.parser.reasoning_parser import ReasoningParser
+from sglang.srt.vector_search.client import VectorSearchClient, VectorSearchClientConfig
+from sglang.srt.vector_search.prompt_injection import format_retrieved_docs, render_context
 
 if TYPE_CHECKING:
     from sglang.srt.managers.template_manager import TemplateManager
@@ -84,6 +88,62 @@ class OpenAIServingChat(OpenAIServingBase):
         )
 
         self.use_dpsk_v32_encoding = self._use_dpsk_v32_encoding()
+        self._vector_search_client: Optional[VectorSearchClient] = None
+
+    def _get_vector_search_client(self) -> Optional[VectorSearchClient]:
+        sa = self.tokenizer_manager.server_args
+        if not getattr(sa, "vector_search_url", None):
+            return None
+        if self._vector_search_client is None:
+            self._vector_search_client = VectorSearchClient(
+                VectorSearchClientConfig(
+                    endpoint=sa.vector_search_url,
+                    timeout_ms=int(sa.vector_search_timeout_ms),
+                )
+            )
+        return self._vector_search_client
+
+    async def handle_request(
+        self, request: ChatCompletionRequest, raw_request: Request
+    ) -> Union[Any, StreamingResponse, ErrorResponse]:
+        sa = self.tokenizer_manager.server_args
+        if getattr(sa, "enable_vector_search_prefill", False):
+            client = self._get_vector_search_client()
+            if client is not None and request.messages:
+                last_user_idx = None
+                for i, m in enumerate(request.messages):
+                    if getattr(m, "role", None) == "user":
+                        last_user_idx = i
+                if last_user_idx is not None:
+                    user_msg = request.messages[last_user_idx]
+                    content = user_msg.content
+                    query_text = content.strip() if isinstance(content, str) else ""
+                    if query_text:
+                        try:
+                            resp = await client.search(
+                                request_id=request.rid or "",
+                                stage=vector_search_pb2.PREFILL,
+                                text=query_text,
+                                topk=int(sa.vector_search_prefill_topk),
+                                deadline_ms=int(sa.vector_search_prefill_deadline_ms),
+                            )
+                            if not resp.error_message and resp.docs:
+                                docs_text = format_retrieved_docs(
+                                    resp.docs, max_docs=int(sa.vector_search_prefill_topk)
+                                )
+                                ctx = render_context(
+                                    str(sa.vector_search_context_template), docs_text
+                                )
+                                request.messages.insert(
+                                    last_user_idx,
+                                    ChatCompletionMessageGenericParam(
+                                        role="system", content=ctx
+                                    ),
+                                )
+                        except Exception as e:
+                            logger.info("Vector search prefill injection failed: %s", e)
+
+        return await super().handle_request(request, raw_request)
 
     def _use_dpsk_v32_encoding(self) -> bool:
         has_chat_template = (
