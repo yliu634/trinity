@@ -23,6 +23,16 @@ message SearchRequest {
   uint32 topk = 4;
   // End-to-end deadline for this retrieval in milliseconds.
   uint32 deadline_ms = 5;
+
+  // Optional Mooncake RDMA response parameters.
+  // If rdma_session_id is non-empty and addresses are non-zero, the server will
+  // RDMA-write packed docs/meta into the caller's buffers and return an empty
+  // docs list over gRPC.
+  string rdma_session_id = 10;
+  uint64 rdma_doc_out_addr = 11;
+  uint32 rdma_doc_out_len = 12;
+  uint64 rdma_meta_out_addr = 13;
+  uint32 rdma_meta_out_len = 14;
 }
 
 message RetrievedDoc {
@@ -38,5 +48,8 @@ message SearchResponse {
   repeated RetrievedDoc docs = 2;
   // Non-empty indicates an error; for MVP keep it empty on success.
   string error_message = 3;
-}
 
+  // If RDMA is used, these report how many bytes were written to each buffer.
+  uint32 rdma_doc_bytes_written = 10;
+  uint32 rdma_meta_bytes_written = 11;
+}
