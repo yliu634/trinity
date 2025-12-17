@@ -250,6 +250,11 @@ class ServerArgs:
     nccl_port: Optional[int] = None
     checkpoint_engine_wait_weights_before_ready: bool = False
 
+    # Vector search (Trinity)
+    # Client-side configuration for a dedicated vector-search pool service.
+    vector_search_url: Optional[str] = None
+    vector_search_timeout_ms: int = 2000
+
     # Quantization and data type
     dtype: str = "auto"
     quantization: Optional[str] = None
@@ -2200,6 +2205,20 @@ class ServerArgs:
             action="store_true",
             help="If set, the server will wait for initial weights to be loaded via checkpoint-engine or other update methods "
             "before serving inference requests.",
+        )
+
+        # Vector search (Trinity)
+        parser.add_argument(
+            "--vector-search-url",
+            type=str,
+            default=ServerArgs.vector_search_url,
+            help="Vector-search pool gRPC endpoint (e.g., http://127.0.0.1:50070 or 127.0.0.1:50070).",
+        )
+        parser.add_argument(
+            "--vector-search-timeout-ms",
+            type=int,
+            default=ServerArgs.vector_search_timeout_ms,
+            help="Timeout in milliseconds for vector-search RPCs (control-plane).",
         )
 
         # Quantization and data type

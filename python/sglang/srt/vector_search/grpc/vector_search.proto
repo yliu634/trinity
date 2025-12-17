@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package sglang.grpc.vector_search;
+
+// Minimal gRPC protocol for a dedicated vector-search pool.
+// Data-plane (e.g., Mooncake RDMA) will be added in later PRs.
+
+service VectorSearch {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+enum Stage {
+  STAGE_UNSPECIFIED = 0;
+  PREFILL = 1;
+  DECODE = 2;
+}
+
+message SearchRequest {
+  string request_id = 1;
+  Stage stage = 2;
+  // Input query text. For MVP we send text and compute embedding in the pool.
+  string text = 3;
+  uint32 topk = 4;
+  // End-to-end deadline for this retrieval in milliseconds.
+  uint32 deadline_ms = 5;
+}
+
+message RetrievedDoc {
+  // Application-level id for locating the document chunk in docstore.
+  string doc_id = 1;
+  // Retrieved chunk text (may be truncated in later PRs).
+  string text = 2;
+  float score = 3;
+}
+
+message SearchResponse {
+  string request_id = 1;
+  repeated RetrievedDoc docs = 2;
+  // Non-empty indicates an error; for MVP keep it empty on success.
+  string error_message = 3;
+}
+
